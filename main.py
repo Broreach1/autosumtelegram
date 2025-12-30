@@ -3,12 +3,12 @@ import os
 import re
 import sqlite3
 import io
-import asyncio
 import pandas as pd
 from datetime import datetime, time, timedelta
 
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InputFile
+from telegram import Update, ReplyKeyboardMarkup, InputFile
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -25,11 +25,7 @@ from reportlab.pdfgen import canvas
 DB_PATH = "totals.db"
 OUTPUT_FILE = "totals_export.xlsx"
 
-BOT_TOKEN = os.getenv(
-    "BOT_TOKEN",
-    "8103291457:AAFhfsVKjY05_0-cLFYxTAB71C3i_nsATZg"
-)
-
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8103291457:AAFhfsVKjY05_0-cLFYxTAB71C3i_nsATZg")
 ADMINS = {2122623994}
 
 # ==============================
@@ -48,17 +44,6 @@ def init_db():
         total REAL,
         invoices INTEGER,
         PRIMARY KEY (chat_id, date, shift, currency)
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS old_totals (
-        chat_id INTEGER,
-        date TEXT,
-        shift TEXT,
-        currency TEXT,
-        total REAL,
-        invoices INTEGER
     )
     """)
 
@@ -94,23 +79,14 @@ def get_shift_and_business_date(now=None):
 
     if SHIFT1_START <= t <= SHIFT1_END:
         return "shift1", today.strftime("%Y-%m-%d")
-
     if SHIFT2_START <= t <= SHIFT2_END:
         return "shift2", today.strftime("%Y-%m-%d")
-
     if t >= SHIFT3_START:
         return "shift3", today.strftime("%Y-%m-%d")
-
-    if t < SHIFT3_END:
-        return "shift3", (today - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    return "shift3", today.strftime("%Y-%m-%d")
-
-def today_str():
-    return datetime.now().strftime("%Y-%m-%d")
+    return "shift3", (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
 # ==============================
-# ----- Totals Operations ------
+# ----- Totals Logic -----------
 # ==============================
 def update_total(chat_id, currency, amount):
     now = datetime.now()
@@ -122,29 +98,20 @@ def update_total(chat_id, currency, amount):
     cur.execute("""
         INSERT INTO history (chat_id, datetime, business_date, shift, currency, amount)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (chat_id, now.strftime("%Y-%m-%d %H:%M:%S"), biz_date, shift, currency, amount))
+    """, (chat_id, now.isoformat(sep=" "), biz_date, shift, currency, amount))
 
     cur.execute("""
-        SELECT total, invoices FROM totals
-        WHERE chat_id=? AND date=? AND shift=? AND currency=?
-    """, (chat_id, biz_date, shift, currency))
-
-    row = cur.fetchone()
-    if row:
-        cur.execute("""
-            UPDATE totals SET total=?, invoices=?
-            WHERE chat_id=? AND date=? AND shift=? AND currency=?
-        """, (row[0] + amount, row[1] + 1, chat_id, biz_date, shift, currency))
-    else:
-        cur.execute("""
-            INSERT INTO totals VALUES (?, ?, ?, ?, ?, ?)
-        """, (chat_id, biz_date, shift, currency, amount, 1))
+        INSERT INTO totals VALUES (?, ?, ?, ?, ?, 1)
+        ON CONFLICT(chat_id, date, shift, currency)
+        DO UPDATE SET
+            total = total + excluded.total,
+            invoices = invoices + 1
+    """, (chat_id, biz_date, shift, currency, amount))
 
     conn.commit()
     conn.close()
 
-def get_totals(chat_id, date=None, shift=None):
-    date = date or today_str()
+def get_totals(chat_id, date, shift=None):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
@@ -169,50 +136,11 @@ def get_totals(chat_id, date=None, shift=None):
     return result
 
 # ==============================
-# ---------- Export ------------
-# ==============================
-def export_excel():
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql("SELECT * FROM history", conn)
-    conn.close()
-
-    if df.empty:
-        df = pd.DataFrame(columns=["id","chat_id","datetime","business_date","shift","currency","amount"])
-
-    df.to_excel(OUTPUT_FILE, index=False)
-    return OUTPUT_FILE
-
-def export_pdf(chat_id, label, shift=None, date=None):
-    date = date or today_str()
-    totals = get_totals(chat_id, date, shift)
-
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, 800, f"Invoice Summary ({label})")
-    c.setFont("Helvetica", 12)
-    c.drawString(50, 770, f"Date: {date}")
-
-    y = 720
-    c.drawString(50, y, f"USD: {totals['USD']['total']:.2f}$ ({totals['USD']['invoices']})")
-    c.drawString(50, y-30, f"KHR: {totals['KHR']['total']:,.0f}៛ ({totals['KHR']['invoices']})")
-
-    c.showPage()
-    c.save()
-    buf.seek(0)
-    return InputFile(buf, filename=f"totals_{label}_{date}.pdf")
-
-# ==============================
 # --------- Helpers ------------
 # ==============================
 def keyboard():
     return ReplyKeyboardMarkup(
-        [
-            ["📊 Total", "📊 Total All"],
-            ["🕐 Shift 1", "🕑 Shift 2", "🌙 Shift 3"],
-            ["📤 Export"]
-        ],
+        [["📊 Total", "📊 Total All"], ["📤 Export"]],
         resize_keyboard=True
     )
 
@@ -220,8 +148,8 @@ def parse_amounts(text):
     text = text.replace(",", "")
     pattern = r"([$៛])\s*(\d+(\.\d+)?)|(\d+(\.\d+)?)\s*(USD|KHR)"
     found = re.findall(pattern, text, re.I)
-    results = []
 
+    results = []
     for f in found:
         if f[0]:
             results.append((float(f[1]), "USD" if f[0] == "$" else "KHR"))
@@ -238,7 +166,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
-
     shift, biz = get_shift_and_business_date()
 
     if text == "📊 Total":
@@ -249,11 +176,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "📊 Total All":
         t = get_totals(chat_id, biz)
         await update.message.reply_text(str(t), reply_markup=keyboard())
-        return
-
-    if text == "📤 Export":
-        path = export_excel()
-        await update.message.reply_document(open(path, "rb"))
         return
 
     amounts = parse_amounts(text)
@@ -274,15 +196,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==============================
 def main():
     if not BOT_TOKEN or "PUT_YOUR" in BOT_TOKEN:
-        raise RuntimeError("❌ BOT_TOKEN not set")
+        raise RuntimeError("BOT_TOKEN missing")
 
     init_db()
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app: Application = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    print("✅ Bot running...")
+    print("✅ Bot running on PTB 21.x / Python 3.13")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
