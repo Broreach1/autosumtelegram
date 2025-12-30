@@ -1,4 +1,4 @@
-
-pandas
 reportlab
 openpyxl
+python-telegram-bot==20.8
+pandas
