@@ -565,7 +565,10 @@ async def recalc_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==============================
 # ------------ Main ------------
 # ==============================
-async def main():
+# ==============================
+# ------------ Main ------------
+# ==============================
+def main():
     print("⚠️ Reminder:")
     print(" - totals.db will be created if missing")
     print(" - history table stores ALL data permanently (with business_date)")
@@ -574,15 +577,18 @@ async def main():
     print("------------------------------------------------------")
 
     init_db()
-    recalc_totals_from_history()  # ✅ Auto recalc before running bot
+    recalc_totals_from_history()
 
     if not BOT_TOKEN or len(BOT_TOKEN) < 20:
-        raise RuntimeError("BOT_TOKEN missing. Set BOT_TOKEN env var or edit the code.")
+        raise RuntimeError("BOT_TOKEN missing. Set BOT_TOKEN env var.")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("សួស្តី! Bot is ready ✅", reply_markup=reply_menu())
+        await update.message.reply_text(
+            "សួស្តី! Bot is ready ✅",
+            reply_markup=reply_menu(update.effective_user.id in ADMINS),
+        )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dump", view_db))
@@ -591,11 +597,9 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("✅ Bot is running...")
-    await app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    # Allows nested event loops (VS Code/Notebook)
-    import nest_asyncio
-    nest_asyncio.apply()
-    asyncio.run(main())
+    main()
+
