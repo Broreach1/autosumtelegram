@@ -1,4 +1,5 @@
-Flask
-gunicorn
-requests
+python-telegram-bot==20.7
 pandas
+reportlab
+nest_asyncio
+openpyxl
