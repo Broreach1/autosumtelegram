@@ -1,4 +1,6 @@
-reportlab
-openpyxl
-python-telegram-bot==20.8
+python-telegram-bot==20.7
+httpx==0.25.2
+httpcore==0.18.0
+anyio==3.7.1
 pandas
+reportlab
